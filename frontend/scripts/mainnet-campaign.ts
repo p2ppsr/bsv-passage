@@ -16,7 +16,7 @@ const ORIGIN = 'https://passage.metanet.app'
 const ARCADE = 'https://arcade-v2-us-1.bsvblockchain.tech'
 const FEE_RATE = 100
 const MUTATING = new Set(['init', 'wallet-fund', 'broadcast-chain', 'scan-matrix', 'sweep'])
-const ACCEPTED = new Set(['ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'MINED'])
+const ACCEPTED = new Set(['ACCEPTED_BY_NETWORK', 'SEEN_ON_NETWORK', 'SEEN_MULTIPLE_NODES', 'MINED'])
 const TERMINAL_FAILURE = new Set(['REJECTED', 'DOUBLE_SPEND_ATTEMPTED'])
 
 type SeedKind = 'bip39' | 'centbee' | 'electrum'
@@ -415,7 +415,12 @@ async function waitConfirmed(path: string): Promise<void> {
     attempt += 1
     const status = await arcadeStatus(txid)
     console.log(JSON.stringify({ txid, attempt, txStatus: status.txStatus ?? 'NOT_FOUND', checkedAt: iso() }))
-    if (status.txStatus === 'MINED') return
+    if (status.txStatus === 'MINED') {
+      if (state.chain.at(-1)?.txid === txid) state.chain[state.chain.length - 1].txStatus = 'MINED'
+      else if (state.funding?.txid === txid) state.funding.txStatus = 'MINED'
+      writeState(path, state)
+      return
+    }
     if (status.txStatus && TERMINAL_FAILURE.has(status.txStatus)) throw new Error(`Terminal status ${status.txStatus} for ${txid}.`)
     await sleep(30_000)
   }
