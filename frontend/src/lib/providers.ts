@@ -52,7 +52,7 @@ const SPLIT_HEIGHT = 556_767
 const MAX_ADDRESSES = 1_200
 const REQUEST_TIMEOUT_MS = 12_000
 const DISCOVERY_BATCH_SIZE = 20
-const IS_TEST = import.meta.env.MODE === 'test'
+const IS_TEST = import.meta.env?.MODE === 'test' && import.meta.env.VITE_PASSAGE_LIVE_MAINNET !== '1'
 
 type Provider = keyof typeof PROVIDER_REQUEST_POLICIES
 

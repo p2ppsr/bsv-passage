@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMasterKey } from './seed'
-import { inspectAddress, inspectAddresses, scanProfile } from './providers'
+import { fetchProviderResource, inspectAddress, inspectAddresses, scanProfile } from './providers'
 import { getProfile } from './catalog'
 
 const bip39 = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
@@ -126,5 +126,29 @@ describe('independent discovery', () => {
     vi.stubGlobal('fetch', permanent)
     await expect(inspectAddress('1PEha8dk5Me5J1rZWpgqSt5F4BroTBLS5y')).rejects.toThrow(/HTTP 401/)
     expect(permanent.mock.calls.filter(([input]) => String(input).includes('addresses/history/all'))).toHaveLength(1)
+  })
+
+  it('retries transient server and network failures through the bounded attempt budget', async () => {
+    const responses = [json({ error: 'upstream' }, 503), Promise.reject(new TypeError('network unavailable')), json({ ok: true })]
+    const fetch = vi.fn(() => Promise.resolve(responses.shift() as Response | Promise<Response>))
+    vi.stubGlobal('fetch', fetch)
+    await expect(fetchProviderResource('WhatsOnChain', 'https://example.test/transient')).resolves.toMatchObject({ status: 200 })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops safely on a provider cooldown beyond the automatic retry window', async () => {
+    const fetch = vi.fn(async () => json({ error: 'cooldown' }, 429, { 'Retry-After': '31' }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(fetchProviderResource('WhatsOnChain', 'https://example.test/cooldown')).rejects.toThrow(/stopped safely/)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels before starting an external provider request', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(fetchProviderResource('Bitails', 'https://example.test/cancelled', controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
