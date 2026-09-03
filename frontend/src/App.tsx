@@ -81,7 +81,7 @@ function Home({ begin, openGuides }: { begin: () => void; openGuides: () => void
       <div className="steps-grid">
         <article><span>01</span><KeyRound /><h3>Match</h3><p>Select the wallet and exact historical derivation profile. Checksummed phrases are derived only in this tab.</p></article>
         <article><span>02</span><Radar /><h3>Verify</h3><p>Passage continues through the address gap only when both providers respond, and locks migration when UTXO sets differ.</p></article>
-        <article><span>03</span><WalletCards /><h3>Review & move</h3><p>Your BRC-100 wallet proposes its own receiving output. Passage verifies every source, fee and signature before you broadcast.</p></article>
+        <article><span>03</span><WalletCards /><h3>Review & move</h3><p>Your BRC-100 wallet proposes its own receiving output. Passage verifies every source, fee and signature before you authorize the wallet to broadcast.</p></article>
       </div>
     </section>
 
@@ -313,12 +313,12 @@ function MigrationWorkspace() {
           <div className="review-heading"><ShieldCheck /><div><strong>Locally signed, not broadcast</strong><span>Confirm the exact proposal below.</span></div></div>
           <dl><div><dt>Source</dt><dd>{formatSats(prepared.sourceSatoshis)} sats</dd></div><div><dt>Wallet outputs</dt><dd>{formatSats(prepared.outputSatoshis)} sats</dd></div><div><dt>Network fee</dt><dd>{formatSats(prepared.feeSatoshis)} sats · {prepared.feeRate.toFixed(2)} sat/kB</dd></div><div><dt>Shape</dt><dd>{prepared.inputCount} input{prepared.inputCount === 1 ? '' : 's'} → {prepared.outputCount} output{prepared.outputCount === 1 ? '' : 's'}</dd></div><div><dt>Expected TXID</dt><dd className="mono" title={prepared.txid}>{shortAddress(prepared.txid)}</dd></div></dl>
           <details><summary>Inspect signed transaction hex</summary><code className="tx-code">{prepared.txHex}</code></details>
-          <label className="final-check"><input type="checkbox" checked={checks.final} onChange={(event) => setChecks({ ...checks, final: event.target.checked })} /><span>I reviewed the amount, fee and expected transaction ID. Broadcast exactly once.</span></label>
+          <label className="final-check"><input type="checkbox" checked={checks.final} onChange={(event) => setChecks({ ...checks, final: event.target.checked })} /><span>I reviewed the amount, fee and expected transaction ID. Authorize my BRC-100 wallet to broadcast exactly once.</span></label>
           {broadcastUncertain && <div className="alert danger"><TriangleAlert /><div><strong>Broadcast outcome needs manual resolution</strong><p>Do not broadcast or abort again. Check expected TXID {prepared.txid} and the source outpoints before clearing this session.</p></div></div>}
-          <div className="review-actions"><button className="button quiet" onClick={cancelPrepared} disabled={Boolean(busy) || broadcastUncertain}><X size={17} /> Cancel proposal</button><button className="button danger-button" onClick={broadcast} disabled={!checks.final || Boolean(busy) || broadcastUncertain}>Broadcast migration <ArrowRight size={17} /></button></div>
+          <div className="review-actions"><button className="button quiet" onClick={cancelPrepared} disabled={Boolean(busy) || broadcastUncertain}><X size={17} /> Cancel proposal</button><button className="button danger-button" onClick={broadcast} disabled={!checks.final || Boolean(busy) || broadcastUncertain}>Authorize wallet broadcast <ArrowRight size={17} /></button></div>
         </div>}
 
-        {receipt && <div className="complete-card"><CircleCheck /><div><div className="eyebrow">Migration broadcast</div><h2>{formatSats(receipt.sourceSatoshis - receipt.feeSatoshis)} sats passed forward.</h2><p>The secret-derived key has been released from Passage state. Confirm the new balance in your BRC-100 wallet before retiring the old backup.</p><a className="button primary" href={`https://whatsonchain.com/tx/${receipt.txid}`} target="_blank" rel="noreferrer">Verify transaction <ExternalLink size={17} /></a></div></div>}
+        {receipt && <div className="complete-card"><CircleCheck /><div><div className="eyebrow">Wallet broadcast complete</div><h2>{formatSats(receipt.sourceSatoshis - receipt.feeSatoshis)} sats passed forward.</h2><p>The secret-derived key has been released from Passage state. Confirm the new balance in your BRC-100 wallet before retiring the old backup.</p><a className="button primary" href={`https://whatsonchain.com/tx/${receipt.txid}`} target="_blank" rel="noreferrer">Verify transaction <ExternalLink size={17} /></a></div></div>}
       </section>
     </div>
     {error && <div className="toast-error" role="alert"><CircleAlert /><div><strong>Passage stopped safely</strong><span>{error}</span></div><button onClick={() => setError('')} aria-label="Dismiss"><X /></button></div>}

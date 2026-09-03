@@ -2,7 +2,7 @@
 
 ## Assets and trust boundary
 
-The protected assets are the legacy recovery phrase/passphrase, derived private keys, the authoritative source-outpoint set, transaction destination, fee, and broadcast outcome. Phrase derivation and P2PKH signing occur inside one browser tab. The target BRC-100 wallet is trusted to create wallet-owned receiving output(s) and persist the resulting action. WhatsOnChain and Bitails are individually untrusted indexers. CARS serves immutable frontend bytes but never receives secret material through an application endpoint.
+The protected assets are the legacy recovery phrase/passphrase, derived private keys, the authoritative source-outpoint set, transaction destination, fee, and broadcast outcome. Phrase derivation and P2PKH signing occur inside one browser tab. The target BRC-100 wallet is trusted to create wallet-owned receiving output(s), persist the resulting action, and broadcast it when the user authorizes `signAction`. Passage does not send the transaction to an indexer or separate broadcaster. WhatsOnChain and Bitails are individually untrusted indexers. CARS serves immutable frontend bytes but never receives secret material through an application endpoint.
 
 ## Adversaries considered
 

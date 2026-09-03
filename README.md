@@ -69,7 +69,7 @@ The unit suite covers BIP-39 and Electrum vectors, path integrity, independent i
 5. The target BRC-100 wallet receives the proven external inputs and creates wallet-owned change.
 6. Passage proves each source transaction with BEEF, re-derives each key, verifies exact P2PKH script/value/outpoint inclusion, and signs `SIGHASH_ALL|FORKID` through the SDK P2PKH template.
 7. The user reviews the exact source value, destination-output value, fee, fee rate, input/output count and expected TXID.
-8. A separate action broadcasts once. Ambiguous outcomes are never automatically retried.
+8. A separate action authorizes the BRC-100 wallet to broadcast once. Passage does not send the transaction to an indexer or a separate broadcaster, and ambiguous outcomes are never automatically retried.
 
 See the full [threat model](docs/THREAT-MODEL.md), [recovery state machine](docs/RECOVERY-RUNBOOK.md), and [security policy](SECURITY.md).
 
