@@ -9,11 +9,14 @@ describe('static secret boundary', () => {
     expect(source).not.toMatch(/localStorage|sessionStorage|console\.(log|debug|info)/)
   })
 
-  it('ships a restrictive inline CSP with only the two discovery providers', () => {
+  it('ships a restrictive inline CSP with discovery providers and exact BRC-100 loopback bridges', () => {
     const html = readFileSync(resolve(import.meta.dirname, '../index.html'), 'utf8')
     expect(html).toContain("default-src 'self'")
     expect(html).toContain("object-src 'none'")
     expect(html).toContain('https://api.whatsonchain.com https://api.bitails.io')
+    expect(html).toContain('http://localhost:3301 http://localhost:3321 https://localhost:2121')
+    expect(html).not.toContain('http://localhost:*')
+    expect(html).not.toContain('http://127.0.0.1:*')
   })
 
   it('refuses to expose recovery controls inside an embedding frame', () => {
