@@ -183,6 +183,17 @@ describe('independent discovery', () => {
     expect(permanent.mock.calls.filter(([input]) => String(input).includes('addresses/history/all'))).toHaveLength(1)
   })
 
+  it('retries a temporarily malformed successful provider payload', async () => {
+    let historyCalls = 0
+    const valid = emptyProviderFetch()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes('addresses/history/all') && historyCalls++ === 0) return json([{ malformed: true }])
+      return valid(input, init)
+    }))
+    await expect(inspectAddress('1PEha8dk5Me5J1rZWpgqSt5F4BroTBLS5y')).resolves.toMatchObject({ providersAgree: true, utxos: [] })
+    expect(historyCalls).toBe(2)
+  })
+
   it('retries transient server and network failures through the bounded attempt budget', async () => {
     const responses = [json({ error: 'upstream' }, 503), Promise.reject(new TypeError('network unavailable')), json({ ok: true })]
     const fetch = vi.fn(() => Promise.resolve(responses.shift() as Response | Promise<Response>))

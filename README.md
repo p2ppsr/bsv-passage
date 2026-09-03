@@ -64,7 +64,7 @@ The unit suite covers BIP-39 and Electrum vectors, path integrity, independent i
 
 1. The user selects a source-backed wallet profile.
 2. The browser validates and derives the seed; the visible phrase/passphrase fields are cleared.
-3. Both receiving and change chains are scanned to the configured gap in provider-supported windows of at most 20 public addresses. WhatsOnChain request starts are held below 3 per second and Bitails below 10 per second; transient `429`/`5xx` responses use bounded exponential backoff and honor reasonable `Retry-After` instructions.
+3. Both receiving and change chains are scanned to the configured gap in provider-supported windows of at most 20 public addresses. WhatsOnChain request starts are held below 3 per second and Bitails below 10 per second; transient `429`/`5xx` responses and temporarily malformed successful payloads use bounded exponential backoff, and reasonable `Retry-After` instructions are honored.
 4. WhatsOnChain and Bitails must agree exactly on every spendable outpoint and value.
 5. The target BRC-100 wallet receives the proven external inputs and creates wallet-owned change.
 6. Passage proves each source transaction with BEEF, re-derives each key, verifies exact P2PKH script/value/outpoint inclusion, and signs `SIGHASH_ALL|FORKID` through the SDK P2PKH template.

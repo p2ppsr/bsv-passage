@@ -145,22 +145,45 @@ function rowsByAddress(body: unknown, provider: Provider, addresses: string[]): 
   return rows
 }
 
+async function readProviderJson<T>(
+  provider: Provider,
+  url: string,
+  signal: AbortSignal | undefined,
+  init: RequestInit,
+  parse: (body: unknown) => T,
+): Promise<T> {
+  let lastError: Error | undefined
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetchProviderResource(provider, url, signal, init)
+    try {
+      return parse(await response.json())
+    } catch (error) {
+      if (signal?.aborted) throw new DOMException('Scan cancelled.', 'AbortError')
+      lastError = asError(error)
+      if (attempt < 2) {
+        await abortableDelay(IS_TEST ? 0 : retryDelay(PROVIDER_REQUEST_POLICIES[provider], `${url}:schema`, attempt), signal)
+      }
+    }
+  }
+  throw lastError ?? new Error(`${provider} returned malformed JSON data.`)
+}
+
 async function queryWhatsOnChainActivity(addresses: string[], signal?: AbortSignal): Promise<Map<string, boolean>> {
   try {
-    const historyResponse = await fetchProviderResource('WhatsOnChain', 'https://api.whatsonchain.com/v1/bsv/main/addresses/history/all', signal, {
+    return await readProviderJson('WhatsOnChain', 'https://api.whatsonchain.com/v1/bsv/main/addresses/history/all', signal, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ addresses }),
+    }, (historyBody) => {
+      const rows = rowsByAddress(historyBody, 'WhatsOnChain', addresses)
+      return new Map(addresses.map((address) => {
+        const row = rows.get(address)!
+        const confirmed = row.confirmed as { result?: unknown[] } | undefined
+        const unconfirmed = row.unconfirmed as { result?: unknown[] } | undefined
+        if (!Array.isArray(confirmed?.result) || !Array.isArray(unconfirmed?.result)) throw new Error('WhatsOnChain returned malformed history data.')
+        return [address, confirmed.result.length > 0 || unconfirmed.result.length > 0]
+      }))
     })
-    const historyBody: unknown = await historyResponse.json()
-    const rows = rowsByAddress(historyBody, 'WhatsOnChain', addresses)
-    return new Map(addresses.map((address) => {
-      const row = rows.get(address)!
-      const confirmed = row.confirmed as { result?: unknown[] } | undefined
-      const unconfirmed = row.unconfirmed as { result?: unknown[] } | undefined
-      if (!Array.isArray(confirmed?.result) || !Array.isArray(unconfirmed?.result)) throw new Error('WhatsOnChain returned malformed history data.')
-      return [address, confirmed.result.length > 0 || unconfirmed.result.length > 0]
-    }))
   } catch (error) {
     if (signal?.aborted) throw new DOMException('Scan cancelled.', 'AbortError')
     throw new ProviderError('WhatsOnChain', asError(error).message)
@@ -169,23 +192,24 @@ async function queryWhatsOnChainActivity(addresses: string[], signal?: AbortSign
 
 async function queryWhatsOnChainUtxos(address: string, signal?: AbortSignal): Promise<Utxo[]> {
   try {
-    const response = await fetchProviderResource('WhatsOnChain', `https://api.whatsonchain.com/v1/bsv/main/address/${encodeURIComponent(address)}/unspent/all`, signal)
-    const utxoBody: unknown = await response.json()
-    const rows = Array.isArray(utxoBody)
-      ? utxoBody
-      : typeof utxoBody === 'object' && utxoBody !== null && Array.isArray((utxoBody as { result?: unknown }).result)
-        ? (utxoBody as { result: unknown[] }).result
-        : undefined
-    if (!rows) throw new Error('WhatsOnChain returned malformed UTXO data.')
-    return normalizeUtxos(rows.map((row) => {
-      const item = row as Record<string, unknown>
-      return {
-        txid: String(item.tx_hash ?? item.txid ?? ''),
-        vout: Number(item.tx_pos ?? item.vout ?? -1),
-        satoshis: Number(item.value ?? item.satoshis ?? 0),
-        height: Number(item.height ?? item.blockheight ?? 0),
-      }
-    }))
+    const url = `https://api.whatsonchain.com/v1/bsv/main/address/${encodeURIComponent(address)}/unspent/all`
+    return await readProviderJson('WhatsOnChain', url, signal, {}, (utxoBody) => {
+      const rows = Array.isArray(utxoBody)
+        ? utxoBody
+        : typeof utxoBody === 'object' && utxoBody !== null && Array.isArray((utxoBody as { result?: unknown }).result)
+          ? (utxoBody as { result: unknown[] }).result
+          : undefined
+      if (!rows) throw new Error('WhatsOnChain returned malformed UTXO data.')
+      return normalizeUtxos(rows.map((row) => {
+        const item = row as Record<string, unknown>
+        return {
+          txid: String(item.tx_hash ?? item.txid ?? ''),
+          vout: Number(item.tx_pos ?? item.vout ?? -1),
+          satoshis: Number(item.value ?? item.satoshis ?? 0),
+          height: Number(item.height ?? item.blockheight ?? 0),
+        }
+      }))
+    })
   } catch (error) {
     if (signal?.aborted) throw new DOMException('Scan cancelled.', 'AbortError')
     throw new ProviderError('WhatsOnChain', asError(error).message)
@@ -194,16 +218,17 @@ async function queryWhatsOnChainUtxos(address: string, signal?: AbortSignal): Pr
 
 async function queryBitailsActivity(addresses: string[], signal?: AbortSignal): Promise<Map<string, boolean>> {
   try {
-    const response = await fetchProviderResource('Bitails', 'https://api.bitails.io/address/balance/multi/separate', signal, {
+    return await readProviderJson('Bitails', 'https://api.bitails.io/address/balance/multi/separate', signal, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addresses }),
+    }, (body) => {
+      const rows = rowsByAddress(body, 'Bitails', addresses)
+      return new Map(addresses.map((address) => {
+        const row = rows.get(address)!
+        const values = [row.confirmed, row.unconfirmed, row.summary, row.count]
+        if (values.some((value) => !Number.isFinite(Number(value)))) throw new Error('Bitails returned malformed balance data.')
+        return [address, values.some((value) => Number(value) !== 0)]
+      }))
     })
-    const rows = rowsByAddress(await response.json(), 'Bitails', addresses)
-    return new Map(addresses.map((address) => {
-      const row = rows.get(address)!
-      const values = [row.confirmed, row.unconfirmed, row.summary, row.count]
-      if (values.some((value) => !Number.isFinite(Number(value)))) throw new Error('Bitails returned malformed balance data.')
-      return [address, values.some((value) => Number(value) !== 0)]
-    }))
   } catch (error) {
     if (signal?.aborted) throw new DOMException('Scan cancelled.', 'AbortError')
     throw new ProviderError('Bitails', asError(error).message)
@@ -213,37 +238,37 @@ async function queryBitailsActivity(addresses: string[], signal?: AbortSignal): 
 async function queryBitailsUtxos(addresses: string[], signal?: AbortSignal): Promise<Map<string, Utxo[]>> {
   if (addresses.length === 0) return new Map()
   try {
-    const response = await fetchProviderResource('Bitails', 'https://api.bitails.io/address/unspent/multi?limit=5000', signal, {
+    return await readProviderJson('Bitails', 'https://api.bitails.io/address/unspent/multi?limit=5000', signal, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addresses }),
-    })
-    const body: unknown = await response.json()
-    if (!Array.isArray(body)) throw new Error('Bitails returned a malformed batch response.')
-    // Bitails' bulk UTXO endpoint omits addresses with no unspent outputs. This
-    // differs from its balance endpoint; an omitted row is therefore an empty
-    // set, not enough evidence to fail a scan by itself. Any funded omission is
-    // still caught by the independent WhatsOnChain outpoint comparison.
-    const rows = new Map<string, Record<string, unknown>>()
-    for (const value of body) {
-      if (typeof value !== 'object' || value === null) throw new Error('Bitails returned malformed UTXO data.')
-      const row = value as Record<string, unknown>
-      const address = String(row.address ?? '')
-      if (!addresses.includes(address) || rows.has(address)) throw new Error('Bitails returned an unexpected or duplicate UTXO row.')
-      rows.set(address, row)
-    }
-    return new Map(addresses.map((address) => {
-      const row = rows.get(address)
-      if (row !== undefined && !Array.isArray(row.unspent)) throw new Error('Bitails returned malformed UTXO data.')
-      const utxos = normalizeUtxos((row?.unspent as unknown[] | undefined ?? []).map((value) => {
-        const item = value as Record<string, unknown>
-        return {
-          txid: String(item.txid ?? item.tx_hash ?? ''),
-          vout: Number(item.vout ?? item.tx_pos ?? -1),
-          satoshis: Number(item.satoshis ?? item.value ?? 0),
-          height: Number(item.blockheight ?? item.height ?? 0),
-        }
+    }, (body) => {
+      if (!Array.isArray(body)) throw new Error('Bitails returned a malformed batch response.')
+      // Bitails' bulk UTXO endpoint omits addresses with no unspent outputs. This
+      // differs from its balance endpoint; an omitted row is therefore an empty
+      // set, not enough evidence to fail a scan by itself. Any funded omission is
+      // still caught by the independent WhatsOnChain outpoint comparison.
+      const rows = new Map<string, Record<string, unknown>>()
+      for (const value of body) {
+        if (typeof value !== 'object' || value === null) throw new Error('Bitails returned malformed UTXO data.')
+        const row = value as Record<string, unknown>
+        const address = String(row.address ?? '')
+        if (!addresses.includes(address) || rows.has(address)) throw new Error('Bitails returned an unexpected or duplicate UTXO row.')
+        rows.set(address, row)
+      }
+      return new Map(addresses.map((address) => {
+        const row = rows.get(address)
+        if (row !== undefined && !Array.isArray(row.unspent)) throw new Error('Bitails returned malformed UTXO data.')
+        const utxos = normalizeUtxos((row?.unspent as unknown[] | undefined ?? []).map((value) => {
+          const item = value as Record<string, unknown>
+          return {
+            txid: String(item.txid ?? item.tx_hash ?? ''),
+            vout: Number(item.vout ?? item.tx_pos ?? -1),
+            satoshis: Number(item.satoshis ?? item.value ?? 0),
+            height: Number(item.blockheight ?? item.height ?? 0),
+          }
+        }))
+        return [address, utxos]
       }))
-      return [address, utxos]
-    }))
+    })
   } catch (error) {
     if (signal?.aborted) throw new DOMException('Scan cancelled.', 'AbortError')
     throw new ProviderError('Bitails', asError(error).message)
