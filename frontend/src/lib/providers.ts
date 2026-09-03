@@ -115,19 +115,30 @@ export async function fetchProviderResource(provider: Provider, url: string, sig
 }
 
 function normalizeUtxos(utxos: Utxo[]): Utxo[] {
-  return [...utxos]
-    .filter((utxo) => Number.isSafeInteger(utxo.satoshis) && utxo.satoshis > 0 && /^[0-9a-f]{64}$/i.test(utxo.txid) && Number.isInteger(utxo.vout) && utxo.vout >= 0)
-    .sort((a, b) => `${a.txid}.${a.vout}`.localeCompare(`${b.txid}.${b.vout}`))
+  for (const utxo of utxos) {
+    if (!Number.isSafeInteger(utxo.satoshis) || utxo.satoshis <= 0
+      || !/^[0-9a-f]{64}$/i.test(utxo.txid)
+      || !Number.isSafeInteger(utxo.vout) || utxo.vout < 0
+      || !Number.isSafeInteger(utxo.height) || utxo.height < 0) {
+      throw new Error('Provider returned an invalid UTXO row.')
+    }
+  }
+  const normalized = [...utxos].sort((a, b) => `${a.txid}.${a.vout}`.localeCompare(`${b.txid}.${b.vout}`))
+  const outpoints = normalized.map((utxo) => `${utxo.txid}.${utxo.vout}`)
+  if (new Set(outpoints).size !== outpoints.length) throw new Error('Provider returned a duplicate UTXO outpoint.')
+  return normalized
 }
 
 function rowsByAddress(body: unknown, provider: Provider, addresses: string[]): Map<string, Record<string, unknown>> {
   if (!Array.isArray(body)) throw new Error(`${provider} returned a malformed batch response.`)
   const rows = new Map<string, Record<string, unknown>>()
   for (const value of body) {
-    if (typeof value !== 'object' || value === null) continue
+    if (typeof value !== 'object' || value === null) throw new Error(`${provider} returned a malformed batch row.`)
     const row = value as Record<string, unknown>
     const address = String(row.address ?? '')
-    if (addresses.includes(address) && !rows.has(address)) rows.set(address, row)
+    if (!addresses.includes(address)) throw new Error(`${provider} returned an unexpected address row.`)
+    if (rows.has(address)) throw new Error(`${provider} returned a duplicate address row.`)
+    rows.set(address, row)
   }
   const missing = addresses.filter((address) => !rows.has(address))
   if (missing.length > 0) throw new Error(`${provider} omitted ${missing.length} requested address${missing.length === 1 ? '' : 'es'}.`)

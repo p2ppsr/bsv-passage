@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createMasterKey } from './seed'
+import { createMasterKey, deriveAddress } from './seed'
 import { fetchProviderResource, inspectAddress, inspectAddresses, scanProfile } from './providers'
 import { getProfile } from './catalog'
 
@@ -62,6 +62,26 @@ describe('independent discovery', () => {
     expect(fetch.mock.calls.filter(([input]) => String(input).includes('unspent')).length).toBe(2)
   })
 
+  it('finds a high-index address only when the configured gap can reach it', async () => {
+    const master = createMasterKey(bip39, '', 'bip39')
+    const highAddress = deriveAddress(master, "m/0'/0/25").address
+    const utxo = { txid: 'a'.repeat(64), vout: 0, satoshis: 20, height: 800000 }
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const addresses = addressesFrom(init)
+      if (url.includes('addresses/history/all')) return json(addresses.map((address) => ({ address, confirmed: { result: address === highAddress ? [{}] : [] }, unconfirmed: { result: [] } })))
+      if (url.includes('balance/multi/separate')) return json(addresses.map((address) => ({ address, confirmed: address === highAddress ? 20 : 0, unconfirmed: 0, summary: address === highAddress ? 20 : 0, count: address === highAddress ? 1 : 0 })))
+      if (url.includes('whatsonchain')) return json({ result: [{ tx_hash: utxo.txid, tx_pos: utxo.vout, value: utxo.satoshis, height: utxo.height }] })
+      if (url.includes('unspent/multi')) return json([{ address: highAddress, unspent: [utxo] }])
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    const profile = getProfile('rockwallet', 'rockwallet-primary')
+    await expect(scanProfile(master, profile, { gapLimit: 20, accountCount: 1 })).resolves.toMatchObject({ funded: [] })
+    const sufficient = await scanProfile(master, profile, { gapLimit: 30, accountCount: 1 })
+    expect(sufficient.funded.map((entry) => entry.index)).toContain(25)
+  })
+
   it('fails closed when providers disagree about an outpoint', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input)
@@ -107,6 +127,41 @@ describe('independent discovery', () => {
     await expect(inspectAddress('1PEha8dk5Me5J1rZWpgqSt5F4BroTBLS5y')).rejects.toThrow(/omitted 1 requested address/)
     await expect(inspectAddresses(['x', 'x'])).rejects.toThrow(/unique addresses/)
     await expect(inspectAddresses(Array.from({ length: 21 }, (_, index) => `x${index}`))).rejects.toThrow(/1–20/)
+  })
+
+  it('rejects duplicate, unexpected and malformed provider rows', async () => {
+    const address = '1PEha8dk5Me5J1rZWpgqSt5F4BroTBLS5y'
+    for (const body of [
+      [{ address, confirmed: { result: [] }, unconfirmed: { result: [] } }, { address, confirmed: { result: [] }, unconfirmed: { result: [] } }],
+      [{ address: 'unexpected', confirmed: { result: [] }, unconfirmed: { result: [] } }],
+      [null],
+    ]) {
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).includes('addresses/history/all')) return json(body)
+        return emptyProviderFetch()(input, init)
+      }))
+      await expect(inspectAddress(address)).rejects.toThrow(/duplicate|unexpected|malformed/)
+    }
+  })
+
+  it('rejects invalid and duplicate UTXO outpoints rather than filtering them', async () => {
+    const address = '1PEha8dk5Me5J1rZWpgqSt5F4BroTBLS5y'
+    const invalidRows = [
+      [{ tx_hash: 'not-a-txid', tx_pos: 0, value: 1, height: 800000 }],
+      [{ tx_hash: 'a'.repeat(64), tx_pos: 0, value: 1, height: 800000 }, { tx_hash: 'a'.repeat(64), tx_pos: 0, value: 1, height: 800000 }],
+    ]
+    for (const rows of invalidRows) {
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input)
+        const addresses = addressesFrom(init)
+        if (url.includes('addresses/history/all')) return json(addresses.map((value) => ({ address: value, confirmed: { result: [{}] }, unconfirmed: { result: [] } })))
+        if (url.includes('balance/multi/separate')) return json(addresses.map((value) => ({ address: value, confirmed: 1, unconfirmed: 0, summary: 1, count: 1 })))
+        if (url.includes('whatsonchain')) return json({ result: rows })
+        if (url.includes('unspent/multi')) return json([])
+        throw new Error(`Unexpected request: ${url}`)
+      }))
+      await expect(inspectAddress(address)).rejects.toThrow(/invalid UTXO|duplicate UTXO/)
+    }
   })
 
   it('retries a transient rate limit but does not retry a permanent client error', async () => {
