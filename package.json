@@ -1,0 +1,24 @@
+{
+  "name": "@p2ppsr/bsv-passage",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Fail-closed historical BSV wallet recovery and BRC-100 migration.",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "scripts": {
+    "start": "lars start",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:test": "npm --prefix frontend run test",
+    "frontend:lint": "npm --prefix frontend run lint",
+    "frontend:qa": "npm --prefix frontend run qa:responsive",
+    "build": "cars build Babbage",
+    "deploy": "cars release now Babbage"
+  },
+  "devDependencies": {
+    "@p2ppsr/cars-cli": "^1.2.33",
+    "@p2ppsr/lars": "^1.5.11"
+  },
+  "overrides": {
+    "@bsv/sdk": "2.4.2"
+  }
+}

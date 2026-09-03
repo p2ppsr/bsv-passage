@@ -1,0 +1,132 @@
+name: Verify and deploy BSV Passage
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: bsv-passage-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      - name: Install locked dependencies
+        run: |
+          npm ci
+          npm --prefix frontend ci
+      - name: Audit production dependencies
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm --prefix frontend audit --omit=dev --audit-level=high
+      - name: Unit, policy, and build gates
+        run: |
+          npm run frontend:test
+          npm run frontend:lint
+          npm run frontend:build
+      - name: Responsive browser gate
+        run: |
+          npx --prefix frontend playwright install --with-deps chromium
+          npm run frontend:qa
+      - name: Package checksum-addressed offline build
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tar -C frontend/build -czf release/bsv-passage-${GITHUB_SHA}.tar.gz .
+          sha256sum release/bsv-passage-${GITHUB_SHA}.tar.gz > release/SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        with:
+          name: bsv-passage-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+      - name: Install locked app dependencies and current CARS CLI
+        run: |
+          npm ci
+          npm --prefix frontend ci
+          npm install --global @p2ppsr/cars-cli@latest
+      - name: Build verified frontend and CARS artifact
+        run: |
+          npm run frontend:build
+          cars build Babbage
+      - name: Check CARS transport and project balance
+        env:
+          CARS_PRIVATE_KEY: ${{ secrets.CARS_PRIVATE_KEY }}
+          CARS_WALLET_STORAGE: ${{ secrets.CARS_WALLET_STORAGE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARS_PRIVATE_KEY:-}" ]; then
+            echo "CARS_PRIVATE_KEY repository secret is required." >&2
+            exit 1
+          fi
+          storage_args=()
+          if [ -n "${CARS_WALLET_STORAGE:-}" ]; then
+            storage_args=(--storage "$CARS_WALLET_STORAGE")
+          fi
+          cars doctor Babbage --key "$CARS_PRIVATE_KEY" --network mainnet "${storage_args[@]}"
+          cars project ensure-balance Babbage \
+            --key "$CARS_PRIVATE_KEY" \
+            --network mainnet \
+            "${storage_args[@]}" \
+            --min 1 \
+            --topup-to 250000
+      - name: Publish CARS release
+        env:
+          CARS_PRIVATE_KEY: ${{ secrets.CARS_PRIVATE_KEY }}
+          CARS_WALLET_STORAGE: ${{ secrets.CARS_WALLET_STORAGE }}
+        run: |
+          set -euo pipefail
+          storage_args=()
+          if [ -n "${CARS_WALLET_STORAGE:-}" ]; then
+            storage_args=(--storage "$CARS_WALLET_STORAGE")
+          fi
+          for attempt in 1 2 3; do
+            log_file="cars-release-attempt-${attempt}.log"
+            set +e
+            cars release now Babbage \
+              --key "$CARS_PRIVATE_KEY" \
+              --network mainnet \
+              "${storage_args[@]}" 2>&1 | tee "$log_file"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ] && grep -q "CARS_RELEASE_SUCCESS" "$log_file"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              if [ "$status" -eq 0 ]; then
+                echo "CARS release exited successfully without its success marker." >&2
+                exit 1
+              fi
+              exit "$status"
+            fi
+            sleep "$((attempt * 20))"
+          done
