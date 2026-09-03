@@ -8,7 +8,7 @@ The protected assets are the legacy recovery phrase/passphrase, derived private 
 
 | Adversary or failure | Control | Residual risk |
 | --- | --- | --- |
-| Malicious/lagging indexer | Exact two-provider outpoint/value agreement; source BEEF and script/value recheck | Both providers could collude or share bad upstream state; address linkage is disclosed |
+| Malicious/lagging/indexer-limited response | Exact two-provider outpoint/value agreement; strict batch-shape checks; provider-specific pacing; bounded `429`/`5xx` retry with `Retry-After`; source BEEF and script/value recheck | Both providers could collude or share bad upstream state; address linkage is disclosed; an extended provider cooldown stops the scan and requires a later rescan |
 | Fork replay | Block outputs created at/before BSV/BCH height 556767 | Later outputs whose ancestry or external handling creates special replay risk require expert review |
 | Path confusion | Named, source-linked profiles; BIP-39 checksum; Electrum seed-version check; known-address recommendation | A valid passphrase can derive a different empty wallet; undocumented wallets remain manual |
 | Target substitution | BRC-100 wallet constructs receiving outputs; proposal summary and expected TXID shown before broadcast | A compromised wallet can create its own malicious output; user must trust and verify the wallet |

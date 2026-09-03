@@ -14,8 +14,9 @@
 1. Choose the exact named profile. For Centbee, the old four-digit PIN is the BIP-39 passphrase.
 2. Enter the phrase and optional passphrase. Passage clears the visible values immediately after derivation.
 3. Keep the default gap of 20 unless the old wallet created a larger known gap. Scan additional BIP-44 accounts only if used.
-4. Compare at least one result address with an old record.
-5. An empty scan is not proof of an empty backup. Recheck profile, passphrase/PIN, language, account and wallet-specific exception.
+4. Passage batches only public addresses, paces each provider below its published unauthenticated request rate, and stops on a long provider cooldown or malformed/partial batch. Waiting and rescanning is safe; never treat a provider error as an empty wallet.
+5. Compare at least one result address with an old record.
+6. An empty scan is not proof of an empty backup. Recheck profile, passphrase/PIN, language, account and wallet-specific exception.
 
 ## Review and pilot
 
