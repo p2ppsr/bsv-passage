@@ -17,6 +17,7 @@ describe('static secret boundary', () => {
     expect(html).toContain('http://localhost:3301 http://localhost:3321 https://localhost:2121')
     expect(html).not.toContain('http://localhost:*')
     expect(html).not.toContain('http://127.0.0.1:*')
+    expect(html).not.toContain('upgrade-insecure-requests')
   })
 
   it('refuses to expose recovery controls inside an embedding frame', () => {
