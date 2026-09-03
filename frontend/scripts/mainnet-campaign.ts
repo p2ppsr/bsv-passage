@@ -7,7 +7,7 @@ import {
   Mnemonic, P2PKH, SatoshisPerKilobyte, Transaction, WalletClient,
 } from '@bsv/sdk'
 import { getProfile } from '../src/lib/catalog'
-import { commitMigration, flattenSources, prepareMigration, type PreparedMigration } from '../src/lib/migration'
+import { commitMigration, connectBrc100, flattenSources, prepareMigration, type PreparedMigration } from '../src/lib/migration'
 import { inspectAddresses, scanProfile } from '../src/lib/providers'
 import { createMasterKey, deriveAddress } from '../src/lib/seed'
 
@@ -109,10 +109,18 @@ interface CampaignState {
     allTargetsMatched: boolean
     completedAt: string
   }
+  finalVerification?: {
+    sweepStatusCounts: Record<string, number>
+    sweepCount: number
+    emptyTargetCount: number
+    walletActionStatusCounts: Record<string, number>
+    walletActionsMatched: number
+    completedAt: string
+  }
 }
 
 function usage(): never {
-  console.log(`BSV Passage mainnet campaign\n\nCommands:\n  init --state <secrets/local/...json> --execute\n  wallet-fund --state <path> --execute\n  wait-confirmed --state <path> [--timeout-minutes 90]\n  broadcast-chain --state <path> [--limit <count>] --execute\n  reconcile-chain --state <path>\n  scan-matrix --state <path> --execute\n  sweep --state <path> --execute\n  status --state <path>\n\nMutating commands additionally require PASSAGE_MAINNET_CAMPAIGN_ACK=${ACK}.`)
+  console.log(`BSV Passage mainnet campaign\n\nCommands:\n  init --state <secrets/local/...json> --execute\n  wallet-fund --state <path> --execute\n  wait-confirmed --state <path> [--timeout-minutes 90]\n  broadcast-chain --state <path> [--limit <count>] --execute\n  reconcile-chain --state <path>\n  scan-matrix --state <path> --execute\n  sweep --state <path> --execute\n  wait-sweeps-confirmed --state <path> [--timeout-minutes 90]\n  verify-empty --state <path>\n  status --state <path>\n\nMutating commands additionally require PASSAGE_MAINNET_CAMPAIGN_ACK=${ACK}.`)
   process.exit(2)
 }
 
@@ -601,6 +609,67 @@ async function sweep(path: string): Promise<void> {
   }
 }
 
+async function waitSweepsConfirmed(path: string): Promise<void> {
+  const state = loadState(path)
+  if (state.pendingSweep || state.sweeps.length === 0) throw new Error('Sweep set is empty or has an unresolved prepared action.')
+  const deadline = Date.now() + Number(option('timeout-minutes') ?? '90') * 60_000
+  for (let attempt = 1; Date.now() < deadline; attempt += 1) {
+    const statusCounts: Record<string, number> = {}
+    for (const sweep of state.sweeps) {
+      const status = await arcadeStatus(sweep.txid)
+      const txStatus = status.txStatus ?? 'NOT_FOUND'
+      statusCounts[txStatus] = (statusCounts[txStatus] ?? 0) + 1
+      if (TERMINAL_FAILURE.has(txStatus)) throw new Error(`Sweep ${sweep.txid} reached terminal status ${txStatus}.`)
+    }
+    console.log(JSON.stringify({ attempt, sweepCount: state.sweeps.length, statusCounts, checkedAt: iso() }))
+    if ((statusCounts.MINED ?? 0) === state.sweeps.length) return
+    await sleep(30_000)
+  }
+  throw new Error('Timed out waiting for every sweep transaction to mine.')
+}
+
+async function verifyEmpty(path: string): Promise<void> {
+  const state = loadState(path)
+  if (state.pendingSweep || state.sweeps.length !== 8) throw new Error(`Expected exactly 8 completed sweep actions; found ${state.sweeps.length}.`)
+  const sweepStatusCounts: Record<string, number> = {}
+  for (const sweep of state.sweeps) {
+    const status = await arcadeStatus(sweep.txid)
+    const txStatus = status.txStatus ?? 'NOT_FOUND'
+    sweepStatusCounts[txStatus] = (sweepStatusCounts[txStatus] ?? 0) + 1
+  }
+  if ((sweepStatusCounts.MINED ?? 0) !== state.sweeps.length) throw new Error('Every sweep must be mined before final verification.')
+
+  let emptyTargetCount = 0
+  for (let start = 0; start < state.targets.length; start += 20) {
+    const batch = state.targets.slice(start, start + 20)
+    const inspections = await inspectAddresses(batch.map((target) => target.address))
+    for (const target of batch) {
+      const inspection = inspections.get(target.address)!
+      if (!inspection.providersAgree || inspection.utxos.length !== 0) throw new Error(`Legacy target ${target.sequence} is not independently verified empty.`)
+      emptyTargetCount += 1
+    }
+    console.log(JSON.stringify({ emptyTargetsVerified: emptyTargetCount, total: state.targets.length }))
+  }
+
+  const wallet = new WalletClient('Cicada', ORIGIN)
+  await connectBrc100(wallet)
+  const listed = await wallet.listActions({ labels: ['bsv-passage', 'legacy-wallet-migration'], labelQueryMode: 'all', includeLabels: true, limit: 10_000, seekPermission: false })
+  const expectedTxids = new Set(state.sweeps.map((sweep) => sweep.txid))
+  const matched = listed.actions.filter((action) => expectedTxids.has(action.txid))
+  if (matched.length !== expectedTxids.size || new Set(matched.map((action) => action.txid)).size !== expectedTxids.size) {
+    throw new Error(`BRC-100 action history matched ${matched.length}/${expectedTxids.size} sweep transactions.`)
+  }
+  const walletActionStatusCounts: Record<string, number> = {}
+  for (const action of matched) walletActionStatusCounts[action.status] = (walletActionStatusCounts[action.status] ?? 0) + 1
+  if ((walletActionStatusCounts.completed ?? 0) !== matched.length) throw new Error('Not every matched BRC-100 action is completed.')
+  state.finalVerification = {
+    sweepStatusCounts, sweepCount: state.sweeps.length, emptyTargetCount,
+    walletActionStatusCounts, walletActionsMatched: matched.length, completedAt: iso(),
+  }
+  writeState(path, state)
+  console.log(JSON.stringify(state.finalVerification))
+}
+
 function status(path: string): void {
   const state = loadState(path)
   const summary = {
@@ -608,21 +677,23 @@ function status(path: string): void {
     chain: { accepted: state.chain.length, planned: state.targets.length, pending: state.pendingChain?.transaction.txid ?? null },
     scans: state.scans.length, sweeps: state.sweeps.length, pendingSweep: state.pendingSweep?.prepared.txid ?? null,
     feesSats: state.chain.reduce((sum, tx) => sum + tx.feeSatoshis, 0) + state.sweeps.reduce((sum, tx) => sum + tx.feeSatoshis, 0),
-    nominalSats: nominal(state), reconciliation: state.reconciliation ?? null,
+    nominalSats: nominal(state), reconciliation: state.reconciliation ?? null, finalVerification: state.finalVerification ?? null,
   }
   console.log(JSON.stringify(summary, null, 2))
 }
 
 async function main(): Promise<void> {
   const name = command()
-  if (!['init', 'wallet-fund', 'wait-confirmed', 'broadcast-chain', 'reconcile-chain', 'scan-matrix', 'sweep', 'status'].includes(name)) usage()
+  if (!['init', 'wallet-fund', 'wait-confirmed', 'broadcast-chain', 'reconcile-chain', 'scan-matrix', 'sweep', 'wait-sweeps-confirmed', 'verify-empty', 'status'].includes(name)) usage()
   assertExecution(name)
   const path = statePath()
   if (name === 'init') return await withLock(path, () => init(path))
   if (!existsSync(path)) throw new Error('Campaign state does not exist; run init first.')
   if (name === 'status') return status(path)
   if (name === 'wait-confirmed') return await waitConfirmed(path)
+  if (name === 'wait-sweeps-confirmed') return await waitSweepsConfirmed(path)
   if (name === 'reconcile-chain') return await reconcileChain(path)
+  if (name === 'verify-empty') return await verifyEmpty(path)
   await withLock(path, async () => {
     if (name === 'wallet-fund') await walletFund(path)
     else if (name === 'broadcast-chain') await broadcastChain(path)

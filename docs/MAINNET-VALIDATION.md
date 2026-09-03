@@ -59,6 +59,8 @@ Sequence:
 6. `reconcile-chain`
 7. `scan-matrix`
 8. `sweep`
-9. independently confirm every sweep, confirm every fixture address is empty, reconcile wallet action history, then destroy the secret fixture
+9. `wait-sweeps-confirmed`
+10. `verify-empty` independently confirms all eight sweeps mined, all 250 fixture addresses empty, and every campaign transaction completed in BRC-100 action history
+11. destroy the secret fixture
 
 Public operational evidence contains transaction IDs, counts, heights, fees, provider results and release revisions—but never phrases, passphrases, private keys, unlocking material or the protected checkpoint.
