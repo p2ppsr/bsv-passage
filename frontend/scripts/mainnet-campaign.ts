@@ -35,6 +35,7 @@ interface ChainTransaction {
   sequence: number
   txid: string
   rawHex: string
+  extendedHex: string
   sourceTxid: string
   sourceVout: number
   sourceSatoshis: number
@@ -257,14 +258,14 @@ async function awaitArcadeAcceptance(txid: string, initial?: Record<string, unkn
   throw new Error(`Arcade did not reach network acceptance for ${txid}; stop and reconcile before retrying.`)
 }
 
-async function broadcastRaw(txid: string, rawHex: string): Promise<string> {
+async function broadcastRaw(txid: string, extendedHex: string): Promise<string> {
   const existing = await arcadeStatus(txid)
   if (existing.found) return await awaitArcadeAcceptance(txid, existing.body)
   let last = ''
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const response = await fetch(`${ARCADE}/tx`, {
-      method: 'POST', body: rawHex, signal: AbortSignal.timeout(30_000),
-      headers: { Accept: 'application/json', 'Content-Type': 'text/plain', 'X-Deployment-ID': 'bsv-passage-mainnet-validation' },
+      method: 'POST', body: JSON.stringify({ rawTx: extendedHex }), signal: AbortSignal.timeout(30_000),
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'XDeployment-ID': 'bsv-passage-mainnet-validation' },
     })
     last = await response.text()
     if (response.ok) {
@@ -320,6 +321,7 @@ async function prepareNextTransaction(state: CampaignState, sequence: number): P
     sequence,
     txid: transaction.id('hex'),
     rawHex: transaction.toHex(),
+    extendedHex: transaction.toHexEF(),
     sourceTxid: source.txid,
     sourceVout: source.vout,
     sourceSatoshis: source.satoshis,
@@ -429,6 +431,15 @@ async function broadcastChain(path: string): Promise<void> {
     if (state.pendingChain) {
       if (state.pendingChain.transaction.sequence !== sequence) throw new Error('Pending chain checkpoint sequence is inconsistent.')
       transaction = state.pendingChain.transaction
+      if (!transaction.extendedHex) {
+        const exact = Transaction.fromHex(transaction.rawHex)
+        const sourceRawHex = sequence === 0 ? state.funding.rawHex : state.chain.at(-1)!.rawHex
+        exact.inputs[0].sourceTransaction = Transaction.fromHex(sourceRawHex)
+        transaction.extendedHex = exact.toHexEF()
+        if (exact.id('hex') !== transaction.txid) throw new Error('Checkpointed transaction ID changed while attaching source data.')
+        state.pendingChain.transaction = transaction
+        writeState(path, state)
+      }
     } else {
       transaction = await prepareNextTransaction(state, sequence)
       const projectedNominal = nominal(state, transaction.outputSatoshis)
@@ -436,7 +447,7 @@ async function broadcastChain(path: string): Promise<void> {
       state.pendingChain = { transaction, preparedAt: iso() }
       writeState(path, state)
     }
-    const txStatus = await broadcastRaw(transaction.txid, transaction.rawHex)
+    const txStatus = await broadcastRaw(transaction.txid, transaction.extendedHex)
     state.chain.push({ ...transaction, txStatus, acceptedAt: iso() })
     state.pendingChain = undefined
     writeState(path, state)
