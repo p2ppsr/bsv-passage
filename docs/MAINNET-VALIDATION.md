@@ -10,6 +10,7 @@ This protocol validates Passage with real BSV while bounding custody exposure, p
 - Fee: transaction construction uses the live 100 sat/kB mining policy and stops if a generated fee is non-positive or above 100 satoshis.
 - Rate: Arcade broadcasts are serialized at no more than two starts per second. Passage keeps WhatsOnChain starts below three per second and Bitails starts below ten per second. `429`, `Retry-After`, transient `5xx`, timeouts, long cooldowns and terminal rejection are explicit states.
 - Recovery: the exact signed raw transaction and its BRC-30 extended-format submission are atomically checkpointed before broadcast. An uncertain request resolves that transaction ID first and can only resend identical bytes. A BRC-100 migration with an ambiguous `signAction` result is never retried automatically.
+- A definite pre-propagation ARC format rejection may be revalidated with source data using ARC's documented `X-ForceValidation` control. Every other terminal rejection remains quarantined.
 
 ## Live wallet matrix
 

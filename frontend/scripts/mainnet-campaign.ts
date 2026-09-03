@@ -260,12 +260,19 @@ async function awaitArcadeAcceptance(txid: string, initial?: Record<string, unkn
 
 async function broadcastRaw(txid: string, extendedHex: string): Promise<string> {
   const existing = await arcadeStatus(txid)
-  if (existing.found) return await awaitArcadeAcceptance(txid, existing.body)
+  const recoverableFormatRejection = existing.txStatus === 'REJECTED'
+    && /transformed to extended format.*missing input source data/i.test(String(existing.body?.extraInfo ?? ''))
+  if (existing.found && !recoverableFormatRejection) return await awaitArcadeAcceptance(txid, existing.body)
   let last = ''
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const response = await fetch(`${ARCADE}/tx`, {
       method: 'POST', body: JSON.stringify({ rawTx: extendedHex }), signal: AbortSignal.timeout(30_000),
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'XDeployment-ID': 'bsv-passage-mainnet-validation' },
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'XDeployment-ID': 'bsv-passage-mainnet-validation',
+        ...(recoverableFormatRejection ? { 'X-ForceValidation': 'true' } : {}),
+      },
     })
     last = await response.text()
     if (response.ok) {
