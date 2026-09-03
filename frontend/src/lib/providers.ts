@@ -74,7 +74,7 @@ function asError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
-async function fetchWithRetry(provider: Provider, url: string, signal?: AbortSignal, init: RequestInit = {}): Promise<Response> {
+export async function fetchProviderResource(provider: Provider, url: string, signal?: AbortSignal, init: RequestInit = {}): Promise<Response> {
   const policy: RequestPolicy = PROVIDER_REQUEST_POLICIES[provider]
   let lastError: Error | undefined
   for (let attempt = 0; attempt < policy.maxAttempts; attempt += 1) {
@@ -136,7 +136,7 @@ function rowsByAddress(body: unknown, provider: Provider, addresses: string[]): 
 
 async function queryWhatsOnChainActivity(addresses: string[], signal?: AbortSignal): Promise<Map<string, boolean>> {
   try {
-    const historyResponse = await fetchWithRetry('WhatsOnChain', 'https://api.whatsonchain.com/v1/bsv/main/addresses/history/all', signal, {
+    const historyResponse = await fetchProviderResource('WhatsOnChain', 'https://api.whatsonchain.com/v1/bsv/main/addresses/history/all', signal, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ addresses }),
@@ -158,7 +158,7 @@ async function queryWhatsOnChainActivity(addresses: string[], signal?: AbortSign
 
 async function queryWhatsOnChainUtxos(address: string, signal?: AbortSignal): Promise<Utxo[]> {
   try {
-    const response = await fetchWithRetry('WhatsOnChain', `https://api.whatsonchain.com/v1/bsv/main/address/${encodeURIComponent(address)}/unspent/all`, signal)
+    const response = await fetchProviderResource('WhatsOnChain', `https://api.whatsonchain.com/v1/bsv/main/address/${encodeURIComponent(address)}/unspent/all`, signal)
     const utxoBody: unknown = await response.json()
     const rows = Array.isArray(utxoBody)
       ? utxoBody
@@ -183,7 +183,7 @@ async function queryWhatsOnChainUtxos(address: string, signal?: AbortSignal): Pr
 
 async function queryBitailsActivity(addresses: string[], signal?: AbortSignal): Promise<Map<string, boolean>> {
   try {
-    const response = await fetchWithRetry('Bitails', 'https://api.bitails.io/address/balance/multi/separate', signal, {
+    const response = await fetchProviderResource('Bitails', 'https://api.bitails.io/address/balance/multi/separate', signal, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addresses }),
     })
     const rows = rowsByAddress(await response.json(), 'Bitails', addresses)
@@ -202,7 +202,7 @@ async function queryBitailsActivity(addresses: string[], signal?: AbortSignal): 
 async function queryBitailsUtxos(addresses: string[], signal?: AbortSignal): Promise<Map<string, Utxo[]>> {
   if (addresses.length === 0) return new Map()
   try {
-    const response = await fetchWithRetry('Bitails', 'https://api.bitails.io/address/unspent/multi?limit=5000', signal, {
+    const response = await fetchProviderResource('Bitails', 'https://api.bitails.io/address/unspent/multi?limit=5000', signal, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addresses }),
     })
     const body: unknown = await response.json()

@@ -10,7 +10,7 @@ import {
   type SignActionSpend,
 } from '@bsv/sdk'
 import type { FundedAddress, ScanReport, Utxo } from './providers'
-import { hasReplayAmbiguity, hasUnconfirmed } from './providers'
+import { fetchProviderResource, hasReplayAmbiguity, hasUnconfirmed } from './providers'
 import { deriveAddress } from './seed'
 
 const MAX_INPUTS_PER_ACTION = 100
@@ -71,23 +71,16 @@ export function assertMigrationSafe(report: ScanReport, sources: SelectedSource[
 }
 
 async function fetchBeef(txid: string): Promise<number[]> {
-  let lastError: Error | undefined
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const response = await fetch(`https://api.whatsonchain.com/v1/bsv/main/tx/${encodeURIComponent(txid)}/beef`, {
-        credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(15_000),
-        headers: { Accept: 'text/plain' },
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const hex = (await response.text()).trim()
-      if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) throw new Error('invalid BEEF response')
-      return Utils.toArray(hex, 'hex')
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)))
-    }
+  try {
+    const response = await fetchProviderResource('WhatsOnChain', `https://api.whatsonchain.com/v1/bsv/main/tx/${encodeURIComponent(txid)}/beef`, undefined, {
+      credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', headers: { Accept: 'text/plain' },
+    })
+    const hex = (await response.text()).trim()
+    if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2 !== 0) throw new Error('invalid BEEF response')
+    return Utils.toArray(hex, 'hex')
+  } catch (error) {
+    throw new Error(`Could not obtain a merkle-proven source transaction: ${error instanceof Error ? error.message : String(error)}`)
   }
-  throw new Error(`Could not obtain a merkle-proven source transaction: ${lastError?.message ?? 'unknown error'}`)
 }
 
 export async function connectBrc100(wallet: WalletClient): Promise<void> {
