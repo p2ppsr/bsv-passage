@@ -16,6 +16,7 @@ import { deriveAddress } from './seed'
 const MAX_INPUTS_PER_ACTION = 100
 const MAX_FEE_RATE = 1_000
 const MIN_FEE_RATE = 1
+const MIGRATION_LABELS = ['bsv-passage', 'legacy-wallet-migration']
 
 export interface SelectedSource {
   address: string
@@ -90,6 +91,25 @@ export async function connectBrc100(wallet: WalletClient): Promise<void> {
   if (network !== 'mainnet') throw new Error(`Passage only migrates mainnet BSV. The connected wallet reports ${network}.`)
 }
 
+export function unresolvedMigrationActions(actions: Array<{ status: string }>): number {
+  return actions.filter((action) => action.status !== 'completed').length
+}
+
+export async function assertNoUnresolvedMigration(wallet: WalletClient): Promise<void> {
+  const listed = await wallet.listActions({
+    labels: MIGRATION_LABELS,
+    labelQueryMode: 'all',
+    includeLabels: true,
+    limit: 10_000,
+    seekPermission: true,
+  })
+  const unresolved = unresolvedMigrationActions(listed.actions)
+  if (unresolved > 0) {
+    const verb = unresolved === 1 ? 'is' : 'are'
+    throw new Error(unresolved + ' earlier Passage action' + (unresolved === 1 ? ' ' : 's ') + verb + ' not yet confirmed. Wait for the BRC-100 wallet to mark every Passage action completed, then scan again.')
+  }
+}
+
 export async function prepareMigration(
   wallet: WalletClient,
   master: HD,
@@ -99,6 +119,7 @@ export async function prepareMigration(
 ): Promise<PreparedMigration> {
   assertMigrationSafe(report, sources)
   await connectBrc100(wallet)
+  await assertNoUnresolvedMigration(wallet)
 
   const beef = new Beef()
   const inputs: CreateActionInput[] = []
@@ -127,7 +148,7 @@ export async function prepareMigration(
     const action = await wallet.createAction({
       inputBEEF: beef.toBinary(),
       description: 'Receive verified legacy BSV through BSV Passage',
-      labels: ['bsv-passage', 'legacy-wallet-migration'],
+      labels: MIGRATION_LABELS,
       inputs,
       options: { randomizeOutputs: true, acceptDelayedBroadcast: false },
     })

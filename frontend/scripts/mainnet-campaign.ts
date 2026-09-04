@@ -98,6 +98,17 @@ interface CampaignState {
     feeSatoshis: number
     completedAt: string
   }>
+  failedSweeps?: Array<{
+    route: string
+    txid: string
+    inputCount: number
+    sourceSatoshis: number
+    feeSatoshis: number
+    completedAt: string
+    txStatus: string
+    failure: string
+    observedAt: string
+  }>
   reconciliation?: {
     statusCounts: Record<string, number>
     transactionCount: number
@@ -151,6 +162,7 @@ function loadState(path: string): CampaignState {
   const state = JSON.parse(readFileSync(path, 'utf8')) as CampaignState
   if (state.version !== 1 || state.network !== 'mainnet') throw new Error('Unsupported or non-mainnet campaign state.')
   if (state.budget.fundingSats > state.budget.maxExposureSats || state.budget.maxUsd > 2) throw new Error('Campaign state violates its hard budget.')
+  state.failedSweeps ??= []
   return state
 }
 
@@ -574,6 +586,19 @@ const sweepRoutes = [
 async function resolvePendingSweep(state: CampaignState, path: string): Promise<void> {
   if (!state.pendingSweep) return
   const status = await arcadeStatus(state.pendingSweep.prepared.txid)
+  if (status.txStatus && TERMINAL_FAILURE.has(status.txStatus)) {
+    const prepared = state.pendingSweep.prepared
+    state.failedSweeps ??= []
+    state.failedSweeps.push({
+      route: state.pendingSweep.route, txid: prepared.txid, inputCount: prepared.inputCount,
+      sourceSatoshis: prepared.sourceSatoshis, feeSatoshis: prepared.feeSatoshis,
+      completedAt: state.pendingSweep.preparedAt, txStatus: status.txStatus,
+      failure: String(status.body?.extraInfo ?? 'No failure detail returned.'), observedAt: iso(),
+    })
+    state.pendingSweep = undefined
+    writeState(path, state)
+    throw new Error(`Prepared sweep ${prepared.txid} was ${status.txStatus} and has been quarantined. Confirm competing transactions before scanning again.`)
+  }
   if (!status.found || !status.txStatus || !ACCEPTED.has(status.txStatus)) {
     throw new Error(`Prepared sweep ${state.pendingSweep.prepared.txid} has an ambiguous outcome. Do not retry; inspect the wallet action and source outpoints.`)
   }
@@ -583,10 +608,41 @@ async function resolvePendingSweep(state: CampaignState, path: string): Promise<
   writeState(path, state)
 }
 
+async function reconcileSweepSet(state: CampaignState, path: string): Promise<Record<string, number>> {
+  const statusCounts: Record<string, number> = {}
+  const active = [] as CampaignState['sweeps']
+  let changed = false
+  state.failedSweeps ??= []
+  for (const sweep of state.sweeps) {
+    const status = await arcadeStatus(sweep.txid)
+    const txStatus = status.txStatus ?? 'NOT_FOUND'
+    statusCounts[txStatus] = (statusCounts[txStatus] ?? 0) + 1
+    if (TERMINAL_FAILURE.has(txStatus)) {
+      if (!state.failedSweeps.some((failed) => failed.txid === sweep.txid)) {
+        state.failedSweeps.push({
+          ...sweep, txStatus, failure: String(status.body?.extraInfo ?? 'No failure detail returned.'), observedAt: iso(),
+        })
+      }
+      changed = true
+    } else {
+      active.push(sweep)
+    }
+  }
+  if (changed) {
+    state.sweeps = active
+    writeState(path, state)
+  }
+  return statusCounts
+}
+
 async function sweep(path: string): Promise<void> {
   const state = loadState(path)
   if (!state.reconciliation?.allTargetsMatched || state.scans.length !== scanScenarios.length) throw new Error('Reconcile the chain and complete the scan matrix before sweeping.')
   await resolvePendingSweep(state, path)
+  const priorStatuses = await reconcileSweepSet(state, path)
+  if (state.sweeps.length > 0 && (priorStatuses.MINED ?? 0) !== state.sweeps.length) {
+    throw new Error('A prior accepted sweep is not mined. Wait for confirmation before preparing another action.')
+  }
   const wallet = new WalletClient('Cicada', ORIGIN)
   const { network } = await wallet.getNetwork({})
   if (network !== 'mainnet') throw new Error(`Wallet reported ${network}; mainnet required.`)
@@ -604,7 +660,10 @@ async function sweep(path: string): Promise<void> {
       state.pendingSweep = undefined
       writeState(path, state)
       console.log(JSON.stringify({ route: route.route, swept: true, txid: receipt.txid, inputCount: receipt.inputCount, sourceSatoshis: receipt.sourceSatoshis, feeSatoshis: receipt.feeSatoshis }))
-      await sleep(10_000)
+      // One accepted action per invocation is a deliberate confirmation
+      // barrier. Overlapping historical profiles can expose the same outpoint,
+      // and both indexers may briefly agree on a stale mempool view.
+      return
     }
   }
 }
@@ -614,14 +673,8 @@ async function waitSweepsConfirmed(path: string): Promise<void> {
   if (state.pendingSweep || state.sweeps.length === 0) throw new Error('Sweep set is empty or has an unresolved prepared action.')
   const deadline = Date.now() + Number(option('timeout-minutes') ?? '90') * 60_000
   for (let attempt = 1; Date.now() < deadline; attempt += 1) {
-    const statusCounts: Record<string, number> = {}
-    for (const sweep of state.sweeps) {
-      const status = await arcadeStatus(sweep.txid)
-      const txStatus = status.txStatus ?? 'NOT_FOUND'
-      statusCounts[txStatus] = (statusCounts[txStatus] ?? 0) + 1
-      if (TERMINAL_FAILURE.has(txStatus)) throw new Error(`Sweep ${sweep.txid} reached terminal status ${txStatus}.`)
-    }
-    console.log(JSON.stringify({ attempt, sweepCount: state.sweeps.length, statusCounts, checkedAt: iso() }))
+    const statusCounts = await reconcileSweepSet(state, path)
+    console.log(JSON.stringify({ attempt, sweepCount: state.sweeps.length, failedSweepCount: state.failedSweeps?.length ?? 0, statusCounts, checkedAt: iso() }))
     if ((statusCounts.MINED ?? 0) === state.sweeps.length) return
     await sleep(30_000)
   }
@@ -630,6 +683,7 @@ async function waitSweepsConfirmed(path: string): Promise<void> {
 
 async function verifyEmpty(path: string): Promise<void> {
   const state = loadState(path)
+  await reconcileSweepSet(state, path)
   if (state.pendingSweep || state.sweeps.length !== 8) throw new Error(`Expected exactly 8 completed sweep actions; found ${state.sweeps.length}.`)
   const sweepStatusCounts: Record<string, number> = {}
   for (const sweep of state.sweeps) {
@@ -676,6 +730,7 @@ function status(path: string): void {
     state: path, createdAt: state.createdAt, funding: state.funding ? { txid: state.funding.txid, satoshis: state.funding.satoshis, txStatus: state.funding.txStatus } : null,
     chain: { accepted: state.chain.length, planned: state.targets.length, pending: state.pendingChain?.transaction.txid ?? null },
     scans: state.scans.length, sweeps: state.sweeps.length, pendingSweep: state.pendingSweep?.prepared.txid ?? null,
+    failedSweeps: state.failedSweeps?.length ?? 0,
     feesSats: state.chain.reduce((sum, tx) => sum + tx.feeSatoshis, 0) + state.sweeps.reduce((sum, tx) => sum + tx.feeSatoshis, 0),
     nominalSats: nominal(state), reconciliation: state.reconciliation ?? null, finalVerification: state.finalVerification ?? null,
   }

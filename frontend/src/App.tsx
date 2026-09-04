@@ -247,12 +247,12 @@ function MigrationWorkspace() {
       <section className="panel recovery-panel">
         <div className="panel-title"><span className="number">1</span><div><h2>Identify the old wallet</h2><p>Start with a documented profile.</p></div></div>
         <label className="field-label" htmlFor="wallet-select">Wallet</label>
-        <select id="wallet-select" value={walletId} onChange={(event) => changeWallet(event.target.value)} disabled={Boolean(prepared) || Boolean(busy)}>
+        <select id="wallet-select" value={walletId} onChange={(event) => changeWallet(event.target.value)} disabled={Boolean(prepared) || Boolean(receipt) || Boolean(busy)}>
           {readyWallets.map((wallet) => <option key={wallet.id} value={wallet.id}>{wallet.name} · {wallet.status}</option>)}
         </select>
         <div className="profile-choices" role="radiogroup" aria-label="Derivation profile">
           {selectedWallet.profiles.map((profile) => <label key={profile.id} className={profile.id === profileId ? 'choice selected' : 'choice'}>
-            <input type="radio" name="profile" value={profile.id} checked={profile.id === profileId} disabled={Boolean(prepared) || Boolean(busy)} onChange={() => { resetSensitive(); setProfileId(profile.id); setError('') }} />
+            <input type="radio" name="profile" value={profile.id} checked={profile.id === profileId} disabled={Boolean(prepared) || Boolean(receipt) || Boolean(busy)} onChange={() => { resetSensitive(); setProfileId(profile.id); setError('') }} />
             <span><strong>{profile.label}</strong><small>{profile.templates.join(' · ')}</small></span><StatusPill tone={profile.confidence === 'verified' ? 'good' : 'neutral'}>{profile.confidence}</StatusPill>
           </label>)}
         </div>
@@ -260,15 +260,15 @@ function MigrationWorkspace() {
 
         <form onSubmit={startScan} className="seed-form">
           <div className="field-heading"><label className="field-label" htmlFor="seed-words">Recovery words</label><button type="button" className="tiny-button" onClick={() => setShowWords((value) => !value)}>{showWords ? 'Hide' : 'Show'}</button></div>
-          <textarea id="seed-words" className={showWords ? '' : 'secret-text'} value={words} disabled={Boolean(prepared)} onChange={(event) => { setWords(event.target.value); setReport(undefined); masterRef.current = undefined }} autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} placeholder={selectedProfile.seedFormat === 'electrum-v2' ? 'Standard Electrum seed words' : '12, 15, 18, 21 or 24 BIP-39 words'} required rows={4} />
+          <textarea id="seed-words" className={showWords ? '' : 'secret-text'} value={words} disabled={Boolean(prepared) || Boolean(receipt)} onChange={(event) => { setWords(event.target.value); setReport(undefined); masterRef.current = undefined }} autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} placeholder={selectedProfile.seedFormat === 'electrum-v2' ? 'Standard Electrum seed words' : '12, 15, 18, 21 or 24 BIP-39 words'} required rows={4} />
           <label className="field-label" htmlFor="seed-passphrase">{walletId === 'centbee' ? 'Original four-digit PIN' : 'Optional seed passphrase'}</label>
-          <input id="seed-passphrase" type="password" value={passphrase} disabled={Boolean(prepared)} onChange={(event) => setPassphrase(event.target.value)} autoComplete="off" spellCheck={false} placeholder={walletId === 'centbee' ? 'Required for Centbee' : 'Leave blank if none'} required={walletId === 'centbee'} />
-          <button className="advanced-toggle" type="button" onClick={() => setAdvanced((value) => !value)}>Advanced discovery <span>{advanced ? '−' : '+'}</span></button>
+          <input id="seed-passphrase" type="password" value={passphrase} disabled={Boolean(prepared) || Boolean(receipt)} onChange={(event) => setPassphrase(event.target.value)} autoComplete="off" spellCheck={false} placeholder={walletId === 'centbee' ? 'Required for Centbee' : 'Leave blank if none'} required={walletId === 'centbee'} />
+          <button className="advanced-toggle" type="button" disabled={Boolean(receipt)} onClick={() => setAdvanced((value) => !value)}>Advanced discovery <span>{advanced ? '−' : '+'}</span></button>
           {advanced && <div className="advanced-grid">
-            <label>Unused address gap<input type="number" min="5" max="100" value={gapLimit} onChange={(event) => setGapLimit(Number(event.target.value))} /></label>
-            <label>BIP-44 accounts<input type="number" min="1" max="20" value={accountCount} onChange={(event) => setAccountCount(Number(event.target.value))} disabled={!selectedProfile.templates.some((path) => path.includes('{account}'))} /></label>
+            <label>Unused address gap<input type="number" min="5" max="100" value={gapLimit} disabled={Boolean(receipt)} onChange={(event) => setGapLimit(Number(event.target.value))} /></label>
+            <label>BIP-44 accounts<input type="number" min="1" max="20" value={accountCount} onChange={(event) => setAccountCount(Number(event.target.value))} disabled={Boolean(receipt) || !selectedProfile.templates.some((path) => path.includes('{account}'))} /></label>
           </div>}
-          <button className="button primary wide" type="submit" disabled={Boolean(busy) || words.trim().length === 0}>{busy ? <><LoaderCircle className="spin" size={18} /> Working safely</> : <>Scan verified paths <Radar size={18} /></>}</button>
+          <button className="button primary wide" type="submit" disabled={Boolean(receipt) || Boolean(busy) || words.trim().length === 0}>{busy ? <><LoaderCircle className="spin" size={18} /> Working safely</> : <>Scan verified paths <Radar size={18} /></>}</button>
           {busy && <div className="progress-box"><div><span className="pulse-dot" />{busy}</div><small>{progressCount > 0 ? `${progressCount} addresses checked · both providers required` : 'No secret material leaves this tab'}</small><button type="button" onClick={() => abortRef.current?.abort()}>Cancel</button></div>}
         </form>
       </section>
@@ -318,11 +318,11 @@ function MigrationWorkspace() {
           <div className="review-actions"><button className="button quiet" onClick={cancelPrepared} disabled={Boolean(busy) || broadcastUncertain}><X size={17} /> Cancel proposal</button><button className="button danger-button" onClick={broadcast} disabled={!checks.final || Boolean(busy) || broadcastUncertain}>Authorize wallet broadcast <ArrowRight size={17} /></button></div>
         </div>}
 
-        {receipt && <div className="complete-card"><CircleCheck /><div><div className="eyebrow">Wallet broadcast complete</div><h2>{formatSats(receipt.sourceSatoshis - receipt.feeSatoshis)} sats passed forward.</h2><p>The secret-derived key has been released from Passage state. Confirm the new balance in your BRC-100 wallet before retiring the old backup.</p><a className="button primary" href={`https://whatsonchain.com/tx/${receipt.txid}`} target="_blank" rel="noreferrer">Verify transaction <ExternalLink size={17} /></a></div></div>}
+        {receipt && <div className="complete-card"><CircleCheck /><div><div className="eyebrow">Submitted through your wallet</div><h2>{formatSats(receipt.sourceSatoshis - receipt.feeSatoshis)} sats are awaiting final proof.</h2><p>The secret-derived key has been released from Passage state. Do not start another recovery with this seed or an overlapping profile until this transaction has at least one confirmation and every Passage action is marked completed in your BRC-100 wallet.</p><a className="button primary" href={`https://whatsonchain.com/tx/${receipt.txid}`} target="_blank" rel="noreferrer">Verify confirmation <ExternalLink size={17} /></a></div></div>}
       </section>
     </div>
     {error && <div className="toast-error" role="alert"><CircleAlert /><div><strong>Passage stopped safely</strong><span>{error}</span></div><button onClick={() => setError('')} aria-label="Dismiss"><X /></button></div>}
-    <div className="workspace-footer"><button onClick={clearSession} disabled={Boolean(busy)}><RefreshCw size={15} /> Clear this recovery session</button><span>Closing or reloading the tab is the strongest browser-memory cleanup.</span></div>
+    <div className="workspace-footer"><button onClick={clearSession} disabled={Boolean(busy)}><RefreshCw size={15} /> {receipt ? 'I confirmed it · Start another recovery' : 'Clear this recovery session'}</button><span>{receipt ? 'Passage will refuse a new action while your BRC-100 wallet still reports an earlier unresolved Passage action.' : 'Closing or reloading the tab is the strongest browser-memory cleanup.'}</span></div>
   </main>
 }
 

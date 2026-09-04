@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertMigrationSafe, flattenSources, smallestPilot } from './migration'
+import { assertMigrationSafe, flattenSources, smallestPilot, unresolvedMigrationActions } from './migration'
 import type { ScanReport } from './providers'
 
 function report(overrides: Partial<ScanReport> = {}): ScanReport {
@@ -40,5 +40,11 @@ describe('migration safety gate', () => {
     const many = report()
     many.funded[0].utxos = Array.from({ length: 101 }, (_, index) => ({ txid: index.toString(16).padStart(64, '0'), vout: 0, satoshis: 1000, height: 800000 }))
     expect(() => assertMigrationSafe(many, flattenSources(many))).toThrow(/limits each reviewed action/)
+  })
+
+  it('blocks a new migration while any earlier Passage action is unresolved', () => {
+    expect(unresolvedMigrationActions([{ status: 'completed' }, { status: 'completed' }])).toBe(0)
+    expect(unresolvedMigrationActions([{ status: 'completed' }, { status: 'unproven' }])).toBe(1)
+    expect(unresolvedMigrationActions([{ status: 'sending' }, { status: 'failed' }])).toBe(2)
   })
 })
