@@ -66,10 +66,11 @@ The unit suite covers BIP-39 and Electrum vectors, path integrity, independent i
 2. The browser validates and derives the seed; the visible phrase/passphrase fields are cleared.
 3. Both receiving and change chains are scanned to the configured gap in provider-supported windows of at most 20 public addresses. WhatsOnChain request starts are held below 3 per second and Bitails below 10 per second; transient `429`/`5xx` responses and temporarily malformed successful payloads use bounded exponential backoff, and reasonable `Retry-After` instructions are honored.
 4. WhatsOnChain and Bitails must agree exactly on every spendable outpoint and value.
-5. The target BRC-100 wallet receives the proven external inputs and creates wallet-owned change.
-6. Passage proves each source transaction with BEEF, re-derives each key, verifies exact P2PKH script/value/outpoint inclusion, and signs `SIGHASH_ALL|FORKID` through the SDK P2PKH template.
-7. The user reviews the exact source value, destination-output value, fee, fee rate, input/output count and expected TXID.
-8. A separate action authorizes the BRC-100 wallet to broadcast once. Passage does not send the transaction to an indexer or a separate broadcaster, and ambiguous outcomes are never automatically retried.
+5. BRC-100 action history must contain no earlier unresolved Passage action. This confirmation barrier prevents overlapping profiles from spending a shared outpoint while both indexers still expose the same stale mempool view.
+6. The target BRC-100 wallet receives the proven external inputs and creates wallet-owned change.
+7. Passage proves each source transaction with BEEF, re-derives each key, verifies exact P2PKH script/value/outpoint inclusion, and signs `SIGHASH_ALL|FORKID` through the SDK P2PKH template.
+8. The user reviews the exact source value, destination-output value, fee, fee rate, input/output count and expected TXID.
+9. A separate action authorizes the BRC-100 wallet to broadcast once. Submission is not called completion: another recovery remains locked until the wallet marks the labeled action `completed`. Passage does not send the transaction to an indexer or a separate broadcaster, and ambiguous outcomes are never automatically retried.
 
 See the full [threat model](docs/THREAT-MODEL.md), [recovery state machine](docs/RECOVERY-RUNBOOK.md), and [security policy](SECURITY.md).
 

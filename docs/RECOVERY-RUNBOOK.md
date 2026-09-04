@@ -24,8 +24,8 @@
 2. Select **Pilot one output**. It migrates the smallest complete UTXO, not an arbitrary fraction.
 3. Confirm the amount, network fee, fee rate, transaction shape and expected TXID.
 4. Broadcast once.
-5. Verify the TXID on an independent explorer and confirm it appears in the target wallet. Wait for confirmation before the remaining balance.
-6. Re-enter the backup, rescan current chain state, and migrate the next batch of up to 100 verified inputs.
+5. Verify the TXID on an independent explorer and confirm it appears in the target wallet. A returned TXID or multi-node propagation is not completion. Wait for at least one confirmation and for every labeled Passage action in the BRC-100 wallet to become `completed`.
+6. Only then re-enter the backup, rescan current chain state, and migrate the next batch of up to 100 verified inputs. This applies across different wallet profiles for the same phrase because their derivation paths can overlap.
 
 If the wallet contains one large UTXO, Passage cannot create a genuinely small pilot without also creating source-wallet change. Do not pretend the full UTXO is a small test. Use professional review or the old wallet’s normal send flow first.
 
