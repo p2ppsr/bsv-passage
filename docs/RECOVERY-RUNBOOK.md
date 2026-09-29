@@ -7,7 +7,7 @@
 3. Find one public receiving address or transaction from the old wallet when possible.
 4. Update and scan a clean device. Disable screen sharing and unnecessary browser extensions.
 5. For meaningful value, clone the tagged source, run tests, build locally, and compare the release SHA-256 file.
-6. Install/open a trusted BRC-100 wallet and confirm it is on BSV mainnet.
+6. Install/open a trusted BRC-100 wallet, confirm the receiving profile and backups, and confirm it is on BSV mainnet. It must supply mainnet block headers through `getHeaderForHeight`; unavailable headers stop preparation.
 
 ## Discover
 
@@ -29,11 +29,20 @@
 
 If the wallet contains one large UTXO, Passage cannot create a genuinely small pilot without also creating source-wallet change. Do not pretend the full UTXO is a small test. Use professional review or the old wallet’s normal send flow first.
 
+## Cancel or recover interrupted preparation
+
+- **Cancel proposal** clears the review only after the wallet explicitly reports `aborted: true`. A refusal or network error leaves it visible; do not assume the source action was released.
+- If preparation failed and cleanup was not confirmed, keep the displayed action reference and expected TXID (when present). Use **Retry releasing action** after checking the wallet state. Another proposal stays blocked until release succeeds.
+- In-app navigation is locked while work, a proposal or cleanup is pending. Closing or reloading the browser does not confirm cancellation; reconcile its action history before continuing.
+- An uncertain broadcast is different from failed preparation: do not abort or broadcast again. Resolve the expected TXID and source outpoints first.
+
 ## Stop conditions
 
 Stop immediately for:
 
-- a provider mismatch or unavailable provider;
+- a provider mismatch (including confirmation height) or unavailable provider;
+- a source proof with a missing/mismatched height or a Merkle root that does not match the wallet's mainnet block header;
+- an unconfirmed action release;
 - a pre-split outpoint;
 - an unconfirmed outpoint;
 - an address that does not match the old wallet;
