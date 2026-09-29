@@ -13,7 +13,7 @@ import {
   type ScanReport,
 } from './lib/providers'
 import {
-  abortPreparedMigration, commitMigration, flattenSources, prepareMigration,
+  abortPreparedMigration, commitMigration, flattenSources, prepareMigration, WalletActionReleaseError,
   smallestPilot, type MigrationReceipt, type PreparedMigration,
 } from './lib/migration'
 
@@ -39,14 +39,14 @@ function Mark() {
   return <span className="brand-mark" aria-hidden="true"><span /><span /></span>
 }
 
-function Header({ page, setPage }: { page: Page; setPage: (page: Page) => void }) {
+function Header({ page, setPage, locked }: { page: Page; setPage: (page: Page) => void; locked: boolean }) {
   const links: { page: Page; label: string }[] = [
     { page: 'migrate', label: 'Migrate' }, { page: 'guides', label: 'Wallet guides' }, { page: 'safety', label: 'Safety' },
   ]
   return <header className="site-header">
-    <button className="brand" onClick={() => setPage('home')} aria-label="BSV Passage home"><Mark /><span>BSV Passage</span></button>
+    <button className="brand" onClick={() => setPage('home')} disabled={locked} aria-label="BSV Passage home"><Mark /><span>BSV Passage</span></button>
     <nav aria-label="Primary navigation">
-      {links.map((link) => <button key={link.page} className={page === link.page ? 'nav-active' : ''} onClick={() => setPage(link.page)}>{link.label}</button>)}
+      {links.map((link) => <button key={link.page} className={page === link.page ? 'nav-active' : ''} onClick={() => setPage(link.page)} disabled={locked}>{link.label}</button>)}
       <a href="https://github.com/p2ppsr/bsv-passage" target="_blank" rel="noreferrer"><Github size={17} /> Source</a>
     </nav>
   </header>
@@ -92,7 +92,7 @@ function Home({ begin, openGuides }: { begin: () => void; openGuides: () => void
   </main>
 }
 
-function MigrationWorkspace() {
+function MigrationWorkspace({ setNavigationLocked }: { setNavigationLocked: (locked: boolean) => void }) {
   const firstWallet = readyWallets[0]
   const [walletId, setWalletId] = useState(firstWallet.id)
   const [profileId, setProfileId] = useState(firstWallet.profiles[0].id)
@@ -108,6 +108,7 @@ function MigrationWorkspace() {
   const [report, setReport] = useState<ScanReport>()
   const [prepared, setPrepared] = useState<PreparedMigration>()
   const [broadcastUncertain, setBroadcastUncertain] = useState(false)
+  const [releaseFailure, setReleaseFailure] = useState<WalletActionReleaseError>()
   const [receipt, setReceipt] = useState<MigrationReceipt>()
   const [mode, setMode] = useState<MigrationMode>('pilot')
   const [checks, setChecks] = useState({ backup: false, stopped: false, liability: false, final: false })
@@ -120,6 +121,10 @@ function MigrationWorkspace() {
     if (preparedRef.current) void abortPreparedMigration(walletClient, preparedRef.current).catch(() => undefined)
   }, [])
 
+  const actionPending = Boolean(busy || prepared || releaseFailure)
+  useEffect(() => { setNavigationLocked(actionPending) }, [actionPending, setNavigationLocked])
+  useEffect(() => () => setNavigationLocked(false), [setNavigationLocked])
+
   const selectedWallet = getWallet(walletId)
   const selectedProfile = getProfile(walletId, profileId)
   const sources = report ? flattenSources(report) : []
@@ -128,7 +133,7 @@ function MigrationWorkspace() {
   const hasReplayRisk = report ? hasReplayAmbiguity(report) : false
   const unconfirmed = report ? hasUnconfirmed(report) : false
   const highValue = (report?.totalSatoshis ?? 0) >= HIGH_VALUE_GUIDANCE_SATS
-  const canPrepare = Boolean(report && report.totalSatoshis > 0 && report.providersAgree && !hasReplayRisk && !unconfirmed && checks.backup && checks.stopped && checks.liability && !prepared && (!highValue || mode === 'pilot' || highValueOverride))
+  const canPrepare = Boolean(report && report.totalSatoshis > 0 && report.providersAgree && !hasReplayRisk && !unconfirmed && checks.backup && checks.stopped && checks.liability && !prepared && !releaseFailure && (!highValue || mode === 'pilot' || highValueOverride))
 
   function resetSensitive(clearReceipt = false) {
     abortRef.current?.abort()
@@ -139,22 +144,25 @@ function MigrationWorkspace() {
     setPrepared(undefined)
     preparedRef.current = undefined
     setBroadcastUncertain(false)
+    setReleaseFailure(undefined)
     setChecks({ backup: false, stopped: false, liability: false, final: false })
     if (clearReceipt) setReceipt(undefined)
   }
 
   async function clearSession() {
-    if (prepared && !broadcastUncertain) {
+    const pendingAction = prepared ?? releaseFailure
+    if (pendingAction && !broadcastUncertain) {
       setBusy('Releasing the proposed wallet action')
       try {
-        await abortPreparedMigration(walletClient, prepared)
+        await abortPreparedMigration(walletClient, pendingAction)
       } catch (caught) {
-        setError(`The wallet action could not be released. Keep this page open and try Cancel proposal again. ${caught instanceof Error ? caught.message : String(caught)}`)
+        setError(`The wallet action could not be released. Keep this page open and retry releasing the action. ${caught instanceof Error ? caught.message : String(caught)}`)
         setBusy('')
         return
       }
     }
     resetSensitive(true)
+    setError('')
     setBusy('')
   }
 
@@ -170,6 +178,7 @@ function MigrationWorkspace() {
     event.preventDefault()
     setError('')
     setReceipt(undefined)
+    setChecks((previous) => ({ ...previous, final: false }))
     setPrepared(undefined)
     setReport(undefined)
     setProgressCount(0)
@@ -196,14 +205,16 @@ function MigrationWorkspace() {
   }
 
   async function prepare() {
-    if (!report || !masterRef.current) return
+    if (!report || !masterRef.current || releaseFailure) return
     setError('')
+    setChecks((previous) => ({ ...previous, final: false }))
     try {
       setBusy('Connecting to your BRC-100 wallet')
       const next = await prepareMigration(walletClient, masterRef.current, report, selectedSources, setBusy)
       setPrepared(next)
       preparedRef.current = next
     } catch (caught) {
+      if (caught instanceof WalletActionReleaseError) setReleaseFailure(caught)
       setError(caught instanceof Error ? caught.message : String(caught))
     } finally { setBusy('') }
   }
@@ -211,7 +222,13 @@ function MigrationWorkspace() {
   async function cancelPrepared() {
     if (!prepared) return
     setBusy('Releasing the proposed wallet action')
-    try { await abortPreparedMigration(walletClient, prepared); setPrepared(undefined); preparedRef.current = undefined }
+    try {
+      await abortPreparedMigration(walletClient, prepared)
+      setPrepared(undefined)
+      preparedRef.current = undefined
+      setChecks((previous) => ({ ...previous, final: false }))
+      setError('')
+    }
     catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)) }
     finally { setBusy('') }
   }
@@ -247,12 +264,12 @@ function MigrationWorkspace() {
       <section className="panel recovery-panel">
         <div className="panel-title"><span className="number">1</span><div><h2>Identify the old wallet</h2><p>Start with a documented profile.</p></div></div>
         <label className="field-label" htmlFor="wallet-select">Wallet</label>
-        <select id="wallet-select" value={walletId} onChange={(event) => changeWallet(event.target.value)} disabled={Boolean(prepared) || Boolean(receipt) || Boolean(busy)}>
+        <select id="wallet-select" value={walletId} onChange={(event) => changeWallet(event.target.value)} disabled={Boolean(prepared) || Boolean(receipt) || Boolean(busy) || Boolean(releaseFailure)}>
           {readyWallets.map((wallet) => <option key={wallet.id} value={wallet.id}>{wallet.name} · {wallet.status}</option>)}
         </select>
         <div className="profile-choices" role="radiogroup" aria-label="Derivation profile">
           {selectedWallet.profiles.map((profile) => <label key={profile.id} className={profile.id === profileId ? 'choice selected' : 'choice'}>
-            <input type="radio" name="profile" value={profile.id} checked={profile.id === profileId} disabled={Boolean(prepared) || Boolean(receipt) || Boolean(busy)} onChange={() => { resetSensitive(); setProfileId(profile.id); setError('') }} />
+            <input type="radio" name="profile" value={profile.id} checked={profile.id === profileId} disabled={Boolean(prepared) || Boolean(receipt) || Boolean(busy) || Boolean(releaseFailure)} onChange={() => { resetSensitive(); setProfileId(profile.id); setError('') }} />
             <span><strong>{profile.label}</strong><small>{profile.templates.join(' · ')}</small></span><StatusPill tone={profile.confidence === 'verified' ? 'good' : 'neutral'}>{profile.confidence}</StatusPill>
           </label>)}
         </div>
@@ -268,7 +285,7 @@ function MigrationWorkspace() {
             <label>Unused address gap<input type="number" min="5" max="100" value={gapLimit} disabled={Boolean(receipt)} onChange={(event) => setGapLimit(Number(event.target.value))} /></label>
             <label>BIP-44 accounts<input type="number" min="1" max="20" value={accountCount} onChange={(event) => setAccountCount(Number(event.target.value))} disabled={Boolean(receipt) || !selectedProfile.templates.some((path) => path.includes('{account}'))} /></label>
           </div>}
-          <button className="button primary wide" type="submit" disabled={Boolean(receipt) || Boolean(busy) || words.trim().length === 0}>{busy ? <><LoaderCircle className="spin" size={18} /> Working safely</> : <>Scan verified paths <Radar size={18} /></>}</button>
+          <button className="button primary wide" type="submit" disabled={Boolean(receipt) || Boolean(busy) || Boolean(releaseFailure) || words.trim().length === 0}>{busy ? <><LoaderCircle className="spin" size={18} /> Working safely</> : <>Scan verified paths <Radar size={18} /></>}</button>
           {busy && <div className="progress-box"><div><span className="pulse-dot" />{busy}</div><small>{progressCount > 0 ? `${progressCount} addresses checked · both providers required` : 'No secret material leaves this tab'}</small><button type="button" onClick={() => abortRef.current?.abort()}>Cancel</button></div>}
         </form>
       </section>
@@ -308,6 +325,14 @@ function MigrationWorkspace() {
             {!prepared && <button className="button primary wide" disabled={!canPrepare || Boolean(busy)} onClick={prepare}>Connect wallet & prepare review <ArrowRight size={18} /></button>}
           </div>}
         </>}
+
+        {releaseFailure && <div className="alert danger" role="alert"><TriangleAlert /><div>
+          <strong>Wallet action still needs reconciliation</strong>
+          <p>Preparation stopped, but the wallet has not confirmed release. Do not start another recovery.</p>
+          <p>Action reference: <code>{releaseFailure.reference}</code></p>
+          {releaseFailure.txid && <p>Expected TXID: <code>{releaseFailure.txid}</code></p>}
+          <button className="button quiet" onClick={clearSession} disabled={Boolean(busy)}>Retry releasing action</button>
+        </div></div>}
 
         {prepared && <div className="review-card">
           <div className="review-heading"><ShieldCheck /><div><strong>Locally signed, not broadcast</strong><span>Confirm the exact proposal below.</span></div></div>
@@ -366,10 +391,11 @@ function Footer() {
 
 function App() {
   const [page, setPage] = useState<Page>('home')
+  const [navigationLocked, setNavigationLocked] = useState(false)
   return <div className="app-shell">
-    <Header page={page} setPage={setPage} />
+    <Header page={page} setPage={setPage} locked={navigationLocked} />
     {page === 'home' && <Home begin={() => setPage('migrate')} openGuides={() => setPage('guides')} />}
-    {page === 'migrate' && <MigrationWorkspace />}
+    {page === 'migrate' && <MigrationWorkspace setNavigationLocked={setNavigationLocked} />}
     {page === 'guides' && <Guides />}
     {page === 'safety' && <Safety />}
     <Footer />

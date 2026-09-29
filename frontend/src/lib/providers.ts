@@ -276,7 +276,7 @@ async function queryBitailsUtxos(addresses: string[], signal?: AbortSignal): Pro
 }
 
 function utxoKey(utxo: Utxo): string {
-  return `${utxo.txid}.${utxo.vout}:${utxo.satoshis}`
+  return `${utxo.txid}.${utxo.vout}:${utxo.satoshis}:${utxo.height}`
 }
 
 function compareUtxos(a: Utxo[], b: Utxo[]): boolean {
@@ -313,7 +313,7 @@ export async function inspectAddresses(addresses: string[], signal?: AbortSignal
       activityAgrees: woc.used === bitails.used,
       providersAgree,
       utxos: providersAgree ? woc.utxos : [],
-      note: providersAgree ? undefined : `${woc.provider} reported ${woc.utxos.length} UTXOs while ${bitails.provider} reported ${bitails.utxos.length}.`,
+      note: providersAgree ? undefined : `${woc.provider} reported ${woc.utxos.length} UTXOs while ${bitails.provider} reported ${bitails.utxos.length}; outpoints, amounts or confirmation heights differ.`,
     }]
   }))
 }

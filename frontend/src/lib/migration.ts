@@ -10,7 +10,7 @@ import {
   type SignActionSpend,
 } from '@bsv/sdk'
 import type { FundedAddress, ScanReport, Utxo } from './providers'
-import { fetchProviderResource, hasReplayAmbiguity, hasUnconfirmed } from './providers'
+import { BSV_BCH_SPLIT_HEIGHT, fetchProviderResource, hasReplayAmbiguity, hasUnconfirmed } from './providers'
 import { deriveAddress } from './seed'
 
 const MAX_INPUTS_PER_ACTION = 100
@@ -35,6 +35,20 @@ export interface PreparedMigration {
   inputCount: number
   outputCount: number
   spends: Record<PositiveIntegerOrZero, SignActionSpend>
+}
+
+/** A failed prepare still owns an action until the wallet confirms its release. */
+export class WalletActionReleaseError extends Error {
+  readonly reference: string
+  readonly txid?: string
+
+  constructor(reference: string, original: unknown, releaseFailure: unknown, txid?: string) {
+    const detail = (value: unknown) => value instanceof Error ? value.message : String(value)
+    super(`${detail(original)} Wallet action ${reference} was not confirmed released: ${detail(releaseFailure)}. Keep the action reference and reconcile it before another recovery.${txid ? ` Expected TXID: ${txid}.` : ''}`)
+    this.name = 'WalletActionReleaseError'
+    this.reference = reference
+    this.txid = txid
+  }
 }
 
 export interface MigrationReceipt {
@@ -110,6 +124,35 @@ export async function assertNoUnresolvedMigration(wallet: WalletClient): Promise
   }
 }
 
+async function verifySourceConfirmation(
+  wallet: WalletClient,
+  source: Transaction,
+  expectedHeight: number,
+  headerRoots: Map<number, string>,
+): Promise<void> {
+  const proof = source.merklePath
+  if (!proof) throw new Error('A selected source is missing its confirmation proof. Wait and scan again.')
+  if (!Number.isSafeInteger(proof.blockHeight) || proof.blockHeight <= BSV_BCH_SPLIT_HEIGHT) {
+    throw new Error('A source confirmation proof predates the BSV/BCH split. Migration is blocked to prevent replay.')
+  }
+  if (proof.blockHeight !== expectedHeight) {
+    throw new Error('A source confirmation proof height differs from the independently verified scan. Scan again.')
+  }
+  // The receiving wallet is already trusted to own the destination and track
+  // mainnet. Bind the indexer proof to its header, not merely to indexer metadata.
+  const root = proof.computeRoot(source.id('hex'))
+  let headerRoot = headerRoots.get(expectedHeight)
+  if (headerRoot === undefined) {
+    const { header } = await wallet.getHeaderForHeight({ height: expectedHeight })
+    if (typeof header !== 'string' || !/^[0-9a-f]{160}$/i.test(header)) {
+      throw new Error('The wallet returned an invalid source block header. Migration remains blocked.')
+    }
+    headerRoot = Utils.toHex(Utils.toArray(header, 'hex').slice(36, 68).reverse())
+    headerRoots.set(expectedHeight, headerRoot)
+  }
+  if (root !== headerRoot) throw new Error('A source confirmation proof does not match the wallet mainnet block header.')
+}
+
 export async function prepareMigration(
   wallet: WalletClient,
   master: HD,
@@ -126,6 +169,8 @@ export async function prepareMigration(
   const keys = new Map<string, ReturnType<typeof deriveAddress>>()
   const uniqueTxids = [...new Set(sources.map((source) => source.utxo.txid))]
   let reference: string | undefined
+  let expectedTxid: string | undefined
+  const headerRoots = new Map<number, string>()
 
   try {
     for (const [index, txid] of uniqueTxids.entries()) {
@@ -174,6 +219,8 @@ export async function prepareMigration(
       if (input.sourceTransaction.outputs[input.sourceOutputIndex].satoshis !== expectedValue) {
         throw new Error(`Output ${key} value differs from the independently verified scan.`)
       }
+      const selected = sources.find((source) => sourceKey(source) === key)!
+      await verifySourceConfirmation(wallet, input.sourceTransaction, selected.utxo.height, headerRoots)
       input.unlockingScriptTemplate = new P2PKH().unlock(derived.privateKey, 'all', false)
     }
     if (seen.size !== sources.length) throw new Error('The wallet omitted one or more verified source outputs.')
@@ -187,6 +234,7 @@ export async function prepareMigration(
     if (tx.outputs.length < 1) throw new Error('The wallet proposed no receiving output.')
 
     await tx.sign()
+    expectedTxid = tx.id('hex')
     for (const [index, input] of tx.inputs.entries()) {
       if (!input.unlockingScript) throw new Error(`Input ${index} was not signed.`)
       spends[index as PositiveIntegerOrZero] = { unlockingScript: input.unlockingScript.toHex() }
@@ -199,7 +247,7 @@ export async function prepareMigration(
 
     return {
       reference,
-      txid: tx.id('hex'),
+      txid: expectedTxid,
       txHex: tx.toHex(),
       sourceSatoshis: sourceTotal,
       outputSatoshis: outputTotal,
@@ -211,14 +259,21 @@ export async function prepareMigration(
     }
   } catch (error) {
     if (reference) {
-      try { await wallet.abortAction({ reference }) } catch { /* best-effort release; the original error is more useful */ }
+      try {
+        await abortPreparedMigration(wallet, { reference })
+      } catch (releaseFailure) {
+        throw new WalletActionReleaseError(reference, error, releaseFailure, expectedTxid)
+      }
     }
     throw error
   }
 }
 
-export async function abortPreparedMigration(wallet: WalletClient, prepared: PreparedMigration): Promise<void> {
-  await wallet.abortAction({ reference: prepared.reference })
+export async function abortPreparedMigration(wallet: WalletClient, prepared: Pick<PreparedMigration, 'reference'>): Promise<void> {
+  const result = await wallet.abortAction({ reference: prepared.reference })
+  if (result.aborted !== true) {
+    throw new Error(`The wallet did not release action ${prepared.reference}. Keep this proposal and reconcile the wallet action before continuing.`)
+  }
 }
 
 export async function commitMigration(wallet: WalletClient, prepared: PreparedMigration): Promise<MigrationReceipt> {
