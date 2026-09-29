@@ -46,7 +46,7 @@ npm run frontend:build
 npm run frontend:dev
 ```
 
-Open `http://127.0.0.1:8080`. Compare the checkout commit and release checksum before entering a valuable backup. The built static artifact is `frontend/build/` and has no application backend.
+Open `http://localhost:8080`. Use the `localhost` hostname rather than a numeric loopback origin: MetaNet originator validation rejects IP-address origins for permissioned wallet methods. Compare the checkout commit and release checksum before entering a valuable backup. The built static artifact is `frontend/build/` and has no application backend.
 
 ## Verification
 
